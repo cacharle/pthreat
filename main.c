@@ -16,53 +16,16 @@
     exit(1); \
 }
 
-#define PIPE_READ 0
-#define PIPE_WRITE 0
-
-
 typedef struct pthreat {
-    struct pthreat *next;
-    struct pthreat *prev;
     pid_t pid;
     // int tid;
+    void *ret;
 } pthreat_t;
-
-// typedef struct pthreat_desc pthreat_t;
-
-static pthreat_t *manager_g = NULL;
-static int pthreat_manager_pipe_g[2] = {-1, -1};
-
-enum manager_request_type {
-    MANAGER_REQUEST_CREATE,
-};
-
-struct manager_request {
-    enum manager_request_type type;
-
-};
-
-void *manager_routine(void *arg)
-{
-    while (true)
-    {
-        struct manager_request request;
-        size_t read_size = read(pthreat_manager_pipe_g[PIPE_READ], &request, sizeof(request));
-        assert(read_size != sizeof(request));
-        switch (request.type)
-        {
-            case MANAGER_REQUEST_CREATE:
-                printf("foo\n");
-                break;
-            default:
-                exit(1);
-        }
-    }
-    return NULL;
-}
 
 typedef void *(*pthreat_routine_t)(void*);
 
 struct routine_wrapper_args {
+    pthreat_t *thread;
     pthreat_routine_t routine;
     void *routine_arg;
     void **return_addr;
@@ -71,21 +34,21 @@ struct routine_wrapper_args {
 int routine_wrapper(void *void_args)
 {
     struct routine_wrapper_args *args = void_args;
-    args->routine(args->routine_arg);
+    args->thread->ret = args->routine(args->routine_arg);
+    free(args);
     return 0;
 }
 
-static int create_thread(pthreat_t *thread, pthreat_routine_t routine, void *arg)
+int pthreat_create(pthreat_t *thread, pthreat_routine_t routine, void *arg)
 {
     void *stack = malloc(sizeof(pthreat_t) + STACK_SIZE);
     ASSERT(stack != NULL);
-
-    struct routine_wrapper_args wrapper_args = {
-        .routine = routine,
-        .routine_arg = arg,
-        .return_addr = NULL,
-    };
-
+    struct routine_wrapper_args *wrapper_args = malloc(sizeof(struct routine_wrapper_args));
+    ASSERT(wrapper_args != NULL);
+    wrapper_args->routine = routine;
+    wrapper_args->routine_arg = arg;
+    wrapper_args->return_addr = NULL;
+    thread->ret = NULL;
     pid_t pid = clone(
         routine_wrapper,
         (uint8_t*)stack + STACK_SIZE,
@@ -94,47 +57,34 @@ static int create_thread(pthreat_t *thread, pthreat_routine_t routine, void *arg
         CLONE_FILES |    // Share file descriptors table
         CLONE_SIGHAND |  // Share signal handling
         CLONE_VM,        // Share virtual memory
-        &wrapper_args
+        wrapper_args
     );
     ASSERT(pid != -1);
     thread->pid = pid;
-    thread->next = manager_g->next;
-    thread->prev = manager_g;
-    manager_g->next->prev = thread;
-    manager_g->next = thread;
-
     return 0;
 }
 
-int pthreat_create(
-    pthreat_t *thread,
-    /* attr, */
-    pthreat_routine_t routine,
-    void *arg
-)
+int pthreat_join(pthreat_t thread, void **ret)
 {
-    if (manager_g == NULL)
-    {
-        create_thread(manager_g, manager_routine, arg);
-    }
+    waitpid(thread.pid, 0, 0);
+    if (ret != NULL)
+        *ret = thread.ret;
     return 0;
 }
 
-
-void *start_routine(void *arg)
+void *test_routine(void *arg)
 {
     (void)arg;
     printf("bonjour\n");
+    sleep(1);
     return NULL;
 }
 
-
-
 int main(void)
 {
-    // printf("yo\n");
-    // pid = waitpid(pid, 0, 0);
-    // ASSERT(pid != -1)
-    // free(stack);
+    pthreat_t thread;
+    pthreat_create(&thread, test_routine, NULL);
+    pthreat_join(thread, NULL);
+
     return 0;
 }
